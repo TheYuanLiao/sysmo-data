@@ -100,8 +100,9 @@ class PlansProcessor:
 if __name__ == '__main__':
     ps = PlansProcessor()
     ps.load_original_plans()
-	# 'palt20', 'palt21', 'palt22', 'palt23', 'palt24', 'palt25', 'samm', 'skane', 'sydost', 
-    for region in ('vast13', 'vast14', 'vast17'):
+    for region in ('palt20', 'palt21', 'palt22', 'palt23', 'palt24', 'palt25',
+                   'vast13', 'vast14', 'vast17',
+                   'samm', 'skane', 'sydost'):
         print(f'Processing region {region}')
         ps.load_input_plans(region=region, test=False)
         ps.load_output_plans(region=region)
