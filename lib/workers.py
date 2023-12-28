@@ -2,11 +2,18 @@ import os
 import pandas as pd
 import sys
 from pathlib import Path
+import yaml
+import matsim
+import sqlalchemy
+from tqdm import tqdm
+import random
 
 
 ROOT_dir = Path(__file__).parent.parent
 sys.path.append(ROOT_dir)
 sys.path.insert(0, os.path.join(ROOT_dir, '/lib'))
+with open(os.path.join(ROOT_dir, 'dbs', 'keys.yaml')) as f:
+    keys_manager = yaml.load(f, Loader=yaml.FullLoader)
 
 
 def personplan2df(person, plan, output=True, experienced=False):
@@ -131,3 +138,90 @@ def plans_summary(df):
     df.loc[:, 'src'] = 'output'
     return df
 
+
+def matsim_events2database(region=None, test=False):
+    """
+    Write MATSim output events to the database.
+    :param region: str, scenario name
+    :param test: boolean, whether to do a test
+    """
+    user = keys_manager['database']['user']
+    password = keys_manager['database']['password']
+    port = keys_manager['database']['port']
+    db_name = keys_manager['database']['name']
+    engine = sqlalchemy.create_engine(f'postgresql://{user}:{password}@localhost:{port}/{db_name}?gssencmode=disable')
+    file_path2output = os.path.join(ROOT_dir, f'dbs/scenarios/{region}/output/output_events.xml.gz')
+    selected_types = ['actend', 'actstart', 'vehicle enters traffic',
+                      'left link', 'vehicle leaves traffic']
+    selected_vars = ['person', 'vehicle', 'time', 'type', 'link']
+    events = matsim.event_reader(file_path2output, types=','.join(selected_types))
+    events_list = []
+    count = 0
+    count2write = 0
+    for event in tqdm(events, desc='Streaming events'):
+        to_delete = set(event.keys()).difference(selected_vars)
+        for d in to_delete:
+            del event[d]
+        events_list.append(event)
+        count += 1
+        count2write += 1
+        if count2write > 2000000:
+            df2write = pd.DataFrame.from_records(events_list)
+            df2write.loc[:, 'person'] = df2write.loc[:, 'person'].fillna(df2write.loc[:, 'vehicle'])
+            df2write.to_sql(region, engine, index=False, if_exists='append', method='multi', chunksize=10000)
+            count2write = 0
+            del df2write
+            events_list = []
+        if test & (count > 2000000):
+            break
+    if count2write > 0:
+        df2write = pd.DataFrame.from_records(events_list)
+        df2write.loc[:, 'person'] = df2write.loc[:, 'person'].fillna(df2write.loc[:, 'vehicle'])
+        df2write.to_sql(region, engine, index=False, if_exists='append', method='multi', chunksize=10000)
+
+
+def eventsdb2batches(region=None, batch_num=20, network=None, geo=None):
+    """
+    Divide the database-stored events into batches for further analysis.
+    :param geo: geodataframe, geometry, original link_id
+    :param network: geodataframe, geometry, new link_id of combined network
+    :param region: str, region name
+    :param batch_num: int, number of batches
+    """
+    user = keys_manager['database']['user']
+    password = keys_manager['database']['password']
+    port = keys_manager['database']['port']
+    db_name = keys_manager['database']['name']
+    engine = sqlalchemy.create_engine(f'postgresql://{user}:{password}@localhost:{port}/{db_name}?gssencmode=disable')
+    # Connect to PostgreSQL server
+    dbConnection = engine.connect()
+    # Read data from PostgreSQL database table and load into a DataFrame instance
+    df_event = pd.read_sql(f'''select * from {region} order by person, time, type DESC;''', dbConnection)
+
+    # Process link id to make it consistent with the combined network
+    gdf_event = pd.merge(df_event, geo.loc[:, ['link_id', 'geometry']],
+                         left_on='link', right_on='link_id', how='left')
+    gdf_event = pd.merge(gdf_event.drop(columns=['link_id']), network[['link_id', 'geometry']],
+                         on='geometry', how='left')
+    df_event = gdf_event.drop(columns=['geometry'])
+    del gdf_event
+
+    print('Creating batches of events...')
+    agents_car = df_event.loc[:, 'person'].unique()
+    num_agents = len(agents_car)
+    batch_num = batch_num
+    batch_size = num_agents // batch_num
+    if num_agents % batch_num == 0:
+        batch_seq = list(range(0, batch_num)) * batch_size
+    else:
+        batch_seq = list(range(0, batch_num)) * batch_size + list(range(0, num_agents % batch_num))
+    random.Random(4).shuffle(batch_seq)
+    agents_car_batch_dict = {person: bt for person, bt in zip(agents_car, batch_seq)}
+    df_event.loc[:, 'batch'] = df_event.loc[:, 'person'].map(agents_car_batch_dict)
+    print(f'Number of car agents: {num_agents}.')
+
+    batch_id = 0
+    for _, data in tqdm(df_event.groupby('batch'), desc='Saving batches'):
+        data.to_csv(os.path.join(ROOT_dir, f'dbs/events/{region}_events_batch{batch_id}.csv.gz'),
+                    index=False, compression="gzip")
+        batch_id += 1
