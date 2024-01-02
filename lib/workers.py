@@ -7,6 +7,8 @@ import matsim
 import sqlalchemy
 from tqdm import tqdm
 import random
+from geopandas import GeoDataFrame
+from shapely.geometry import Point
 
 
 ROOT_dir = Path(__file__).parent.parent
@@ -225,3 +227,22 @@ def eventsdb2batches(region=None, batch_num=20, network=None, geo=None):
         data.to_csv(os.path.join(ROOT_dir, f'dbs/events/{region}_events_batch{batch_id}.csv.gz'),
                     index=False, compression="gzip")
         batch_id += 1
+
+
+def df2gdf_point(df, x_field, y_field, crs=4326, drop=True):
+    """
+    Convert two columns of GPS coordinates into POINT geo dataframe
+    :param drop: boolean, if true, x and y columns will be dropped
+    :param df: dataframe, containing X and Y
+    :param x_field: string, col name of X
+    :param y_field: string, col name of Y
+    :param crs: int, epsg code
+    :return: a geo dataframe with geometry of POINT
+    """
+    geometry = [Point(xy) for xy in zip(df[x_field], df[y_field])]
+    if drop:
+        gdf = GeoDataFrame(df.drop(columns=[x_field, y_field]), geometry=geometry)
+    else:
+        gdf = GeoDataFrame(df, crs=crs, geometry=geometry)
+    gdf.set_crs(epsg=crs, inplace=True)
+    return gdf
