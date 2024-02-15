@@ -26,7 +26,7 @@ This repository documents the methodology of generating these data which can be 
 
 *We input the agents' daily activity plans along with the road network into MATSim for iterative replanning, aiming for a convergence on optimal activity plans for all agents. 
 Subsequently, we retrieve the individual mobility trajectories of agents from the MATSim simulation.
-The setup adheres to the MATSim 13.0 benchmark scenario, with slight adjustments. 
+The setup adheres to the MATSim 13.0 benchmark scenario (`src\config_samm.xml`), with slight adjustments. 
 The strategy for replanning integrates BestScore (60%), TimeAllocationMutator (30%), and ReRoute (10%)—
 the percentages denote the proportion of agents utilizing these strategies.
 
